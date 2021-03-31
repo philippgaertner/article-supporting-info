@@ -1,0 +1,711 @@
+---
+title: "Analysis of honeybee drone activity during the mating season in Northwestern Argentina"
+subtitle: "Data Analysis"
+author: "Philipp Gärtner"
+date: "9/24/2020"
+output: 
+  html_document: 
+    toc: yes
+    keep_md: no
+---
+
+This GitHub repository contains the data and figures accompanying the manuscript
+
+**Analysis of honeybee drone activity during the mating season in Northwestern Argentina**
+
+by Marta Ayup, Philipp Gärtner, José Agosto-Rivera, Peter Marendy, Paulo de Souza and Albertos Galindo-Cardona
+
+The data presented here are licensed under the CC BY-SA 4.0 international license, a copy of which can be found [here](https://creativecommons.org/licenses/by-sa/4.0/). Under this license, you can copy and redistribute the material in any medium or format as long as you give appropriate credit, provide a link to the license, and indicate if changes were made.
+
+Additional information concerning the data is available upon request from the authors. Please send a mail to agalindo@tucuman-conicet.gov.ar for more information.
+
+
+## Software
+
+All analysis and figures were performed with R 4.0.3. 
+
+## Data
+The 'data' folder contains the all data files.
+
+
+```{r setup, include=TRUE, echo=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(tidy = TRUE)
+knitr::opts_chunk$set(cache = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(eval = FALSE)
+knitr::opts_chunk$set(fig.align='center')
+```
+
+
+
+```{r install.packages, eval=TRUE}
+# Check for missing R packages and install them
+list.of.packages <- c("tidyr", "dplyr", "lubridate", 
+                      "stringr", "ggplot2", "pals", "ggrepel", "scales", "forcats")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[, "Package"])]
+if (length(new.packages)) install.packages(new.packages)
+```
+
+
+
+```{r load.packages, eval=TRUE}
+# Loading Packages
+library(tidyr)
+library(dplyr)
+library(lubridate)
+library(stringr)
+library(ggplot2)   
+library(pals)
+library(ggrepel)
+library(scales)
+library(forcats)
+```
+
+
+
+```{r read.data, tidy=FALSE, eval=TRUE}
+# Load Data
+files <- list.files(path = "data",pattern = ".txt")
+data  <- data.frame()
+
+# Read all files into one data.frame
+for(i in 1:length(files)) {
+  
+  x <- read.delim(file = paste0("data/", files[i]),
+                  skip = 1, 
+                  header = TRUE, 
+                  sep = ",", 
+                  stringsAsFactors = F)
+  x$file <- files[i]
+  
+  data <- rbind(data,x)
+}
+```
+
+
+```{r correct.data.type, tidy=FALSE, eval=TRUE}
+# Preprocess data into the correct format
+d <- data %>%
+  select(Date = Date, 
+         Time = Time, 
+         Duration = Duration..hrs.min.sec.micro., 
+         Classification = Classification..60.seconds.threshold.,
+         Detection.Count = Detection.count,
+         ID = file) %>%
+  unite(Date.Time, c(Date, Time),  remove=FALSE) %>%
+  mutate(Date.Time = ymd_hms(Date.Time, tz = "UTC")) %>%
+  mutate(Civil.Time = with_tz(Date.Time, tzone = "America/Argentina/Cordoba")) %>%
+  mutate(Date = as.Date(Civil.Time, tz = "America/Argentina/Cordoba")) %>%
+  mutate(Duration = hms(Duration)) %>%
+  mutate(ID = str_replace(ID, "_classified__60.txt", "")) %>%
+  mutate(Time = format(as.POSIXct(Civil.Time, tz = "America/Argentina/Cordoba"),format = "%H:%M")) %>%
+  mutate(Time.HMS = format(as.POSIXct(Civil.Time, tz = "America/Argentina/Cordoba"),format="%H:%M:%S")) %>% #- hours(3)   # local time
+  mutate(Hour = format(as.POSIXct(Civil.Time, tz = "America/Argentina/Cordoba"),format = "%H")) %>%
+  mutate(DOY = as.integer(yday(Date)))
+
+date(d$Civil.Time) <- "2017-01-01"
+
+#head(d)
+```
+
+
+
+```{r helper.functions, eval=TRUE, tidy=TRUE}
+# Add Helper Functions
+library(plyr)
+my_breaks <- round_any(exp(seq(log(10), log(1000), length = 5)), 10)
+detach(package:plyr)
+
+every_nth = function(n) {
+  return(function(x) {x[c(TRUE, rep(FALSE, n - 1))]})
+}
+```
+
+
+[Back to Top](#top)
+
+## Figures
+
+### Drone arrival & departure times during the year
+
+```{r drone_arrival_and_departure_times_during_year,eval=TRUE, tidy=T}
+
+Arrival <- d %>% 
+  arrange(ID, Date.Time) %>% 
+  group_by(ID) %>% 
+  mutate(Arrival  = lag(Classification) == "B" & Classification == "A" & lead(Classification) == "A") %>%
+  ungroup() %>%
+  filter(Arrival == 'TRUE') %>%
+  group_by(Hour, Date, Arrival) %>%
+  summarise(Count = n()) %>%
+  ungroup() %>%
+  mutate(Direction = "Arrival") %>%
+  select(Date, Hour, Count, Direction) 
+  
+Departure <- d %>% 
+  arrange(ID, Date.Time) %>% 
+  group_by(ID) %>% 
+  mutate(Departure  = lag(Classification) == "A" & Classification == "B" & lead(Classification) == "B") %>% 
+  ungroup() %>%
+  filter(Departure == 'TRUE') %>%
+  group_by(Hour, Date, Departure) %>%
+  summarise(Count = n()) %>%
+  ungroup() %>%
+  mutate(Direction = "Departure") %>%
+  select(Date, Hour, Count, Direction)   
+
+movement_times <- rbind(Arrival, Departure)
+
+xx <- movement_times %>%
+  complete(Date = seq.Date(min(Date), max(Date), by="day")) %>%
+  mutate(Active = ifelse(Direction %in% c("Departure", "Arrival"), NA, Date)) %>%
+  mutate(Active = as.Date(Active, origin = "1970-01-01")) 
+
+  
+  # ggplot(data = movement_times,aes(Date, Hour)) + 
+  # geom_vline(data = xx,xintercept = xx$Active, alpha = 0.05, size = 2.7) +
+  # geom_point(aes(fill = Count),pch = 21, size = 2) + 
+  # facet_grid(cols = vars(Direction)) + 
+  # scale_y_discrete(breaks = every_nth(n = 4)) +
+  # theme_bw() + theme(legend.position = c(.28, 1.16),
+  #                    legend.direction  ="horizontal",
+  #                    panel.grid.major = element_blank(),
+  #                    panel.grid.minor = element_blank(),
+  #                    plot.title = element_text(face = "bold"),
+  #                    plot.subtitle = element_text(face = "italic")) + 
+  # scale_fill_gradient(trans = "log",breaks = my_breaks, 
+  #                     labels = my_breaks,name="")+
+  # labs(y = "Hour of the day", title = "Drone arrival & departure times during the year", subtitle = paste0("Individual counts\n(log. scale)\n")) 
+
+```
+
+
+```{r drone_arrival_and_departure_times_during_year_flipped, eval=FALSE, echo=F}
+
+ggplot(data = movement_times,aes(y = Date, x = Hour)) + 
+  geom_hline(data = xx,yintercept = xx$Active, alpha = 0.05, size = 2.7) +
+  geom_point(aes(fill = Count),pch = 21, size = 2) + 
+  facet_grid(cols = vars(Direction)) + 
+  scale_x_discrete(breaks = every_nth(n = 4)) +
+  theme_bw() + theme(legend.position = c(.28, 1.16),
+                     legend.direction  ="horizontal",
+                     panel.grid.major = element_blank(),
+                     panel.grid.minor = element_blank(),
+                     plot.title = element_text(face = "bold"),
+                     plot.subtitle = element_text(face = "italic")) + 
+  scale_fill_gradient(trans = "log",breaks = my_breaks, 
+                      labels = my_breaks,name="")+
+labs(x = "Hour of the day", y = "", title = "Drone arrival & departure times during the year", subtitle = paste0("Individual counts\n(log. scale)\n")) 
+
+```
+
+```{r drone_arrival_and_departure_times_during_year_flipped_am_pm, eval=TRUE, echo=F}
+
+ggplot(data = movement_times,aes(y = Date, x = Hour)) + 
+  geom_hline(data = xx,yintercept = xx$Active, alpha = 0.05, size = 2.7) +
+  geom_point(aes(fill = Count),pch = 21, size = 2) + 
+  facet_grid(cols = vars(Direction)) + 
+  scale_x_discrete(breaks = every_nth(n = 3), labels = c("12am", paste0(1:3*3,"am"), "12noon",               paste0(1:3*3,"pm"))) +
+  theme_bw() + theme(legend.position = c(.28, 1.16),
+                     legend.direction  ="horizontal",
+                     panel.grid.major = element_blank(),
+                     panel.grid.minor = element_blank(),
+                     plot.title = element_text(face = "bold"),
+                     plot.subtitle = element_text(face = "italic")) + 
+  scale_fill_gradient(trans = "log",breaks = my_breaks, 
+                      labels = my_breaks,name="")+
+labs(x = "hour of day", y = "", title = "Drone arrival & departure times during the year", subtitle = paste0("Individual counts\n(log. scale)\n")) 
+
+```
+Arrival Time (left panel) and Departure (right panel) of the drones marked with RFID in Tucumán. The color gradient goes from black to blue, where black are few individual counts and blue to more than 100 counts. Grey bars indicate days without activity. The time of day is in UTC, which indicates 3 hours less in NO Argentina.
+
+[Back to Top](#top)
+
+### Drone departure counts in the morning
+
+```{r drone_departure_counts_morning_am_pm, eval=TRUE, echo=F, tidy=T}
+
+d %>% 
+  arrange(ID, Date.Time) %>% 
+  group_by(ID) %>% 
+  mutate(Departure  = lag(Classification) == "A" & Classification == "B" & lead(Classification) == "B" & Hour <= 11) %>% 
+  ungroup() %>%
+  filter(Departure == 'TRUE') %>%
+  group_by(ID) %>% 
+  mutate(n=n()) %>%                       
+  select(Date, Civil.Time, n, ID) %>%
+  mutate(ID.short = str_sub(ID, -3)) %>%       
+  ungroup() %>%
+  mutate(pt_size = 2) %>%
+  mutate(pt_size = ifelse(ID.short %in% c("065", "125"), 2, 1)) %>%
+  ggplot(aes(x = Civil.Time, y = Date, label = ID.short)) +
+  geom_point(aes(fill = factor(n)), pch = 21) +
+  theme_bw() + 
+  theme(legend.justification = c(0, 1), 
+        legend.position = c(0.05, 0.95),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.direction  ="horizontal",
+        legend.box.background = element_rect(colour = "black"),
+        plot.title = element_text(face = "bold"),
+        plot.subtitle = element_text(face = "italic"),  
+        plot.caption = element_text(face = "italic")) + 
+  geom_text_repel(aes(alpha = pt_size, size = pt_size, fontface = pt_size), show_guide = FALSE) +
+  scale_size_continuous(range = c(3, 4)) +
+  scale_alpha_continuous(range = c(0.33, 1)) +
+  scale_x_datetime(name = "hour of day", date_breaks = "3 hours", date_labels = "%l%P") +
+  labs(x = "hour of day", y = "date", 
+       title = "Drone departure counts in the morning", 
+       fill = "Total counts per drone", subtitle = "Point label: Drone ID")
+
+```
+
+
+```{r drone_departure_counts_morning, eval=F, echo=F, tidy=T}
+
+d %>% 
+  arrange(ID, Date.Time) %>% 
+  group_by(ID) %>% 
+  mutate(Departure  = lag(Classification) == "A" & Classification == "B" & lead(Classification) == "B" & Hour <= 11) %>% 
+  ungroup() %>%
+  filter(Departure == 'TRUE') %>%
+  group_by(ID) %>% 
+  mutate(n=n()) %>%                       
+  select(Date, Civil.Time, n, ID) %>%
+  mutate(ID.short = str_sub(ID, -3)) %>%       
+  ungroup() %>%
+  mutate(pt_size = 2) %>%
+  mutate(pt_size = ifelse(ID.short %in% c("065", "125"), 2, 1)) %>%
+  ggplot(aes(x = Civil.Time, y = Date, label = ID.short)) +
+  geom_point(aes(fill = factor(n)), pch = 21) +
+  theme_bw() + 
+  theme(legend.justification = c(0, 1), 
+        legend.position = c(0.05, 0.95),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.direction  ="horizontal",
+        legend.box.background = element_rect(colour = "black"),
+        plot.title = element_text(face = "bold"),
+        plot.subtitle = element_text(face = "italic"),  
+        plot.caption = element_text(face = "italic")) + 
+  geom_text_repel(aes(alpha = pt_size, size = pt_size, fontface = pt_size), show_guide = FALSE) +
+  scale_size_continuous(range = c(3, 4)) +
+  scale_alpha_continuous(range = c(0.33, 1)) +
+  labs(x = "hour of day", y = "date", 
+       title = "Drone departure counts in the morning", 
+       fill = "Total counts per drone", subtitle = "Point label: Drone ID")
+
+```
+Individually tagged drones departing in the mornings, during the nuptial flight season. Each color indicates how many times each drone departed from the hive. Red: one time, green: two times, blue: three times, and violet: four times.
+
+
+[Back to Top](#top)
+
+### Drone activity groups
+
+```{r departure_return_departure, tidy=T, eval=T, echo=F}
+
+dd <- d %>% 
+  arrange(ID, Date.Time) %>%     
+  group_by(ID, Date) %>%        
+  mutate(Departure.Morning = lag(Classification) == "A" & Classification == "B" & lead(Classification) == "B" & Hour <= 11) %>% 
+  mutate(Arrival.Afterwards = lag(Classification) == "B" & Classification == "A" & lead(Classification) == "A" & Hour > 11) %>% 
+  mutate(Departure.Afternoon = lag(Classification) == "A" & Classification == "B" & lead(Classification) == "B" & Hour > 11) %>% 
+  filter(Departure.Morning  == "TRUE" | Arrival.Afterwards == "TRUE" | Departure.Afternoon == "TRUE") %>%
+  mutate(Departure.Return.YES = lag(Departure.Morning) == "TRUE" & Arrival.Afterwards == "TRUE" & lead(Departure.Afternoon) == "TRUE") %>%
+  filter(Departure.Return.YES == "TRUE" | 
+           lag(Departure.Return.YES) == "TRUE" & Departure.Afternoon == "TRUE" | 
+           Departure.Morning == "TRUE" & lead(Departure.Return.YES) == "TRUE") %>%
+  mutate(Day.unique = length(table(DOY))) %>%
+  mutate(ID.short = str_sub(ID, -3)) %>% # add short ID
+  unite_("ID.new", c("ID.short","Date")) %>%
+  select(Civil.Time, ID.new, Arrival.Afterwards)
+
+
+ggplot(data = dd, aes(x = Civil.Time, y = fct_reorder(ID.new, Civil.Time))) + 
+  scale_x_datetime(breaks = seq(as.POSIXct("2017-01-01 00:00:00"),
+                                as.POSIXct("2017-01-02 00:00:00"), "4 hours"),
+                   labels = date_format("%H:%M", tz = "America/Argentina/Cordoba")) +
+  geom_rect(
+    fill = "#d9d9d9", colour = "darkgrey", alpha = 1/10, 
+    xmin = as.POSIXct("2017-01-01 00:00:00", tz = "America/Argentina/Cordoba"),
+    xmax = as.POSIXct("2017-01-01 12:00:00", tz = "America/Argentina/Cordoba"),
+    ymin = 0, ymax = 22) + 
+  geom_rect(
+    fill = "#f0f0f0", colour = "darkgrey", alpha = 1/10, 
+    xmin = as.POSIXct("2017-01-01 12:00:00", tz = "America/Argentina/Cordoba"),
+    xmax = as.POSIXct("2017-01-02 00:00:00", tz = "America/Argentina/Cordoba"),
+    ymin = 0, ymax = 22) + 
+  geom_rect(
+    fill = "NA", colour = "#737373", alpha = 0.5,
+    xmin = as.POSIXct("2017-01-01 02:20:00",tz = "America/Argentina/Cordoba"),
+    xmax = as.POSIXct("2017-01-01 03:40:00",tz = "America/Argentina/Cordoba"),
+    ymin = 0.7, ymax = 20.4) + 
+  geom_rect(
+    fill = "NA", colour = "#737373", alpha = 0.5,
+    xmin = as.POSIXct("2017-01-01 05:30:00",tz = "America/Argentina/Cordoba"),
+    xmax = as.POSIXct("2017-01-01 07:40:00",tz = "America/Argentina/Cordoba"),
+    ymin = 0.7, ymax = 20.4) + 
+  geom_rect(
+    fill = "NA", colour = "#737373", alpha = 0.5,
+    xmin = as.POSIXct("2017-01-01 09:50:00",tz = "America/Argentina/Cordoba"),
+    xmax = as.POSIXct("2017-01-01 12:30:00",tz = "America/Argentina/Cordoba"),
+    ymin = 0.7, ymax = 20.4) + 
+  geom_rect(
+    fill = "NA", colour = "#737373", alpha = 0.5,
+    xmin = as.POSIXct("2017-01-01 14:00:00",tz = "America/Argentina/Cordoba"),
+    xmax = as.POSIXct("2017-01-01 17:30:00",tz = "America/Argentina/Cordoba"),
+    ymin = 0.7, ymax = 20.4) + 
+  geom_path(colour = "#333333", alpha = 1/10) + 
+  geom_point(aes(colour = factor(Arrival.Afterwards)), size = 2) + 
+  theme_bw() + 
+  scale_x_datetime(name = "hour of day", date_breaks = "2 hours", date_labels = "%l%P") +
+  labs(x = "hour of day", 
+       y = "individual bee") +
+  theme(legend.position = "none",
+        axis.text.y.left = element_blank(),
+        axis.ticks.y.left  = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        legend.direction  ="horizontal") + 
+  scale_linetype_discrete(name="Recurring\nDays")
+```
+Drones that were active in hour groups during the day. Departure (red) and arrival (green). 
+
+[Back to Top](#top)
+
+
+```{r departure_return_departure_kmeans4, tidy=T, eval=F, echo=F}
+# K-Means Cluster Analysis
+fit <- kmeans(dd$Civil.Time, 4) # 5 cluster solution
+# get cluster means
+aggregate(dd$Civil.Time,by=list(fit$cluster),FUN=mean)
+# append cluster assignment
+mydata <- data.frame(dd, fit$cluster)
+
+ggplot(data = mydata, aes(x = Civil.Time, y = ID.new)) + 
+  #scale_x_datetime(breaks = seq(as.POSIXct("2017-01-01 00:00:00"),
+  #                              as.POSIXct("2017-01-02 00:00:00"), "4 hours"),
+  #                 labels = date_format("%H:%M", tz = "America/Argentina/Cordoba")) +
+  geom_point(aes(colour = factor(fit.cluster)), size = 2) 
+
+ggplot(data = mydata, aes(x = Civil.Time, y = fct_reorder(ID.new, Civil.Time))) + 
+  scale_x_datetime(breaks = seq(as.POSIXct("2017-01-01 00:00:00"),
+                                as.POSIXct("2017-01-02 00:00:00"), "4 hours"),
+                   labels = date_format("%H:%M", tz = "America/Argentina/Cordoba")) +
+  geom_rect(
+    fill = "#d9d9d9", colour = "darkgrey", alpha = 1/10, 
+    xmin = as.POSIXct("2017-01-01 00:00:00", tz = "America/Argentina/Cordoba"),
+    xmax = as.POSIXct("2017-01-01 12:00:00", tz = "America/Argentina/Cordoba"),
+    ymin = 0, ymax = 22) + 
+  geom_rect(
+    fill = "#f0f0f0", colour = "darkgrey", alpha = 1/10, 
+    xmin = as.POSIXct("2017-01-01 12:00:00", tz = "America/Argentina/Cordoba"),
+    xmax = as.POSIXct("2017-01-02 00:00:00", tz = "America/Argentina/Cordoba"),
+    ymin = 0, ymax = 22) + 
+  geom_rect(
+    fill = "NA", colour = "black", alpha = 0.5,
+    xmin = as.POSIXct("2017-01-01 02:20:00",tz = "America/Argentina/Cordoba"),
+    xmax = as.POSIXct("2017-01-01 03:40:00",tz = "America/Argentina/Cordoba"),
+    ymin = 0.7, ymax = 20.4) + 
+  geom_rect(
+    fill = "NA", colour = "black", alpha = 0.5,
+    xmin = as.POSIXct("2017-01-01 05:30:00",tz = "America/Argentina/Cordoba"),
+    xmax = as.POSIXct("2017-01-01 07:40:00",tz = "America/Argentina/Cordoba"),
+    ymin = 0.7, ymax = 20.4) + 
+  geom_rect(
+    fill = "NA", colour = "black", alpha = 0.5,
+    xmin = as.POSIXct("2017-01-01 09:50:00",tz = "America/Argentina/Cordoba"),
+    xmax = as.POSIXct("2017-01-01 12:30:00",tz = "America/Argentina/Cordoba"),
+    ymin = 0.7, ymax = 20.4) + 
+  geom_rect(
+    fill = "NA", colour = "black", alpha = 0.5,
+    xmin = as.POSIXct("2017-01-01 14:00:00",tz = "America/Argentina/Cordoba"),
+    xmax = as.POSIXct("2017-01-01 17:30:00",tz = "America/Argentina/Cordoba"),
+    ymin = 0.7, ymax = 20.4) + 
+  geom_path(colour = "#333333", alpha = 1/10) + 
+  geom_point(aes(fill= factor(fit.cluster), colour = factor(Arrival.Afterwards)), stroke = 2, size = 4, pch=21) + 
+  theme_bw() + 
+  scale_color_manual(values = c("TRUE" = "darkgreen",
+                                  "FALSE" = "black"))+
+  labs(x = "hour of day", 
+       y = "individual bee") +
+  theme(legend.position = "none",
+        axis.text.y.left = element_blank(),
+        axis.ticks.y.left  = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        legend.direction  ="horizontal") + 
+  scale_linetype_discrete(name="Recurring\nDays")
+```
+
+```{r departure_return_departure_kmeans5, tidy=T, eval=F, echo=F}
+# K-Means Cluster Analysis
+fit <- kmeans(dd$Civil.Time, 5) # 5 cluster solution
+# get cluster means
+aggregate(dd$Civil.Time,by=list(fit$cluster),FUN=mean)
+# append cluster assignment
+mydata <- data.frame(dd, fit$cluster)
+
+ggplot(data = mydata, aes(x = Civil.Time, y = ID.new)) + 
+  #scale_x_datetime(breaks = seq(as.POSIXct("2017-01-01 00:00:00"),
+  #                              as.POSIXct("2017-01-02 00:00:00"), "4 hours"),
+  #                 labels = date_format("%H:%M", tz = "America/Argentina/Cordoba")) +
+  geom_point(aes(colour = factor(fit.cluster)), size = 2) 
+
+ggplot(data = mydata, aes(x = Civil.Time, y = fct_reorder(ID.new, Civil.Time))) + 
+  scale_x_datetime(breaks = seq(as.POSIXct("2017-01-01 00:00:00"),
+                                as.POSIXct("2017-01-02 00:00:00"), "4 hours"),
+                   labels = date_format("%H:%M", tz = "America/Argentina/Cordoba")) +
+  geom_rect(
+    fill = "#d9d9d9", colour = "darkgrey", alpha = 1/10, 
+    xmin = as.POSIXct("2017-01-01 00:00:00", tz = "America/Argentina/Cordoba"),
+    xmax = as.POSIXct("2017-01-01 12:00:00", tz = "America/Argentina/Cordoba"),
+    ymin = 0, ymax = 22) + 
+  geom_rect(
+    fill = "#f0f0f0", colour = "darkgrey", alpha = 1/10, 
+    xmin = as.POSIXct("2017-01-01 12:00:00", tz = "America/Argentina/Cordoba"),
+    xmax = as.POSIXct("2017-01-02 00:00:00", tz = "America/Argentina/Cordoba"),
+    ymin = 0, ymax = 22) + 
+  geom_rect(
+    fill = "NA", colour = "black", alpha = 0.5,
+    xmin = as.POSIXct("2017-01-01 02:20:00",tz = "America/Argentina/Cordoba"),
+    xmax = as.POSIXct("2017-01-01 03:40:00",tz = "America/Argentina/Cordoba"),
+    ymin = 0.7, ymax = 20.4) + 
+  geom_rect(
+    fill = "NA", colour = "black", alpha = 0.5,
+    xmin = as.POSIXct("2017-01-01 05:30:00",tz = "America/Argentina/Cordoba"),
+    xmax = as.POSIXct("2017-01-01 07:40:00",tz = "America/Argentina/Cordoba"),
+    ymin = 0.7, ymax = 20.4) + 
+  geom_rect(
+    fill = "NA", colour = "black", alpha = 0.5,
+    xmin = as.POSIXct("2017-01-01 09:50:00",tz = "America/Argentina/Cordoba"),
+    xmax = as.POSIXct("2017-01-01 12:30:00",tz = "America/Argentina/Cordoba"),
+    ymin = 0.7, ymax = 20.4) + 
+  geom_rect(
+    fill = "NA", colour = "black", alpha = 0.5,
+    xmin = as.POSIXct("2017-01-01 14:00:00",tz = "America/Argentina/Cordoba"),
+    xmax = as.POSIXct("2017-01-01 17:30:00",tz = "America/Argentina/Cordoba"),
+    ymin = 0.7, ymax = 20.4) + 
+  geom_path(colour = "#333333", alpha = 1/10) + 
+  geom_point(aes(fill= factor(fit.cluster), colour = factor(Arrival.Afterwards)), stroke = 2, size = 4, pch=21) + 
+  theme_bw() + 
+  scale_color_manual(values = c("TRUE" = "darkgreen",
+                                  "FALSE" = "black"))+
+  labs(x = "hour of day", 
+       y = "individual bee") +
+  theme(legend.position = "none",
+        axis.text.y.left = element_blank(),
+        axis.ticks.y.left  = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        legend.direction  ="horizontal") + 
+  scale_linetype_discrete(name="Recurring\nDays")
+```
+
+```{r departure_return_departure_kmeans6, tidy=T, eval=F, echo=F}
+# K-Means Cluster Analysis
+fit <- kmeans(dd$Civil.Time, 6) # 5 cluster solution
+# get cluster means
+aggregate(dd$Civil.Time,by=list(fit$cluster),FUN=mean)
+# append cluster assignment
+mydata <- data.frame(dd, fit$cluster)
+
+ggplot(data = mydata, aes(x = Civil.Time, y = ID.new)) + 
+  #scale_x_datetime(breaks = seq(as.POSIXct("2017-01-01 00:00:00"),
+  #                              as.POSIXct("2017-01-02 00:00:00"), "4 hours"),
+  #                 labels = date_format("%H:%M", tz = "America/Argentina/Cordoba")) +
+  geom_point(aes(colour = factor(fit.cluster)), size = 2) 
+
+ggplot(data = mydata, aes(x = Civil.Time, y = fct_reorder(ID.new, Civil.Time))) + 
+  scale_x_datetime(breaks = seq(as.POSIXct("2017-01-01 00:00:00"),
+                                as.POSIXct("2017-01-02 00:00:00"), "4 hours"),
+                   labels = date_format("%H:%M", tz = "America/Argentina/Cordoba")) +
+  geom_rect(
+    fill = "#d9d9d9", colour = "darkgrey", alpha = 1/10, 
+    xmin = as.POSIXct("2017-01-01 00:00:00", tz = "America/Argentina/Cordoba"),
+    xmax = as.POSIXct("2017-01-01 12:00:00", tz = "America/Argentina/Cordoba"),
+    ymin = 0, ymax = 22) + 
+  geom_rect(
+    fill = "#f0f0f0", colour = "darkgrey", alpha = 1/10, 
+    xmin = as.POSIXct("2017-01-01 12:00:00", tz = "America/Argentina/Cordoba"),
+    xmax = as.POSIXct("2017-01-02 00:00:00", tz = "America/Argentina/Cordoba"),
+    ymin = 0, ymax = 22) + 
+  geom_rect(
+    fill = "NA", colour = "black", alpha = 0.5,
+    xmin = as.POSIXct("2017-01-01 02:20:00",tz = "America/Argentina/Cordoba"),
+    xmax = as.POSIXct("2017-01-01 03:40:00",tz = "America/Argentina/Cordoba"),
+    ymin = 0.7, ymax = 20.4) + 
+  geom_rect(
+    fill = "NA", colour = "black", alpha = 0.5,
+    xmin = as.POSIXct("2017-01-01 05:30:00",tz = "America/Argentina/Cordoba"),
+    xmax = as.POSIXct("2017-01-01 07:40:00",tz = "America/Argentina/Cordoba"),
+    ymin = 0.7, ymax = 20.4) + 
+  geom_rect(
+    fill = "NA", colour = "black", alpha = 0.5,
+    xmin = as.POSIXct("2017-01-01 09:50:00",tz = "America/Argentina/Cordoba"),
+    xmax = as.POSIXct("2017-01-01 12:30:00",tz = "America/Argentina/Cordoba"),
+    ymin = 0.7, ymax = 20.4) + 
+  geom_rect(
+    fill = "NA", colour = "black", alpha = 0.5,
+    xmin = as.POSIXct("2017-01-01 14:00:00",tz = "America/Argentina/Cordoba"),
+    xmax = as.POSIXct("2017-01-01 17:30:00",tz = "America/Argentina/Cordoba"),
+    ymin = 0.7, ymax = 20.4) + 
+  geom_path(colour = "#333333", alpha = 1/10) + 
+  geom_point(aes(fill= factor(fit.cluster), colour = factor(Arrival.Afterwards)), stroke = 2, size = 4, pch=21) + 
+  theme_bw() + 
+  scale_color_manual(values = c("TRUE" = "darkgreen",
+                                  "FALSE" = "black"))+
+  labs(x = "hour of day", 
+       y = "individual bee") +
+  theme(legend.position = "none",
+        axis.text.y.left = element_blank(),
+        axis.ticks.y.left  = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        legend.direction  ="horizontal") + 
+  scale_linetype_discrete(name="Recurring\nDays")
+```
+
+### Dawn and morning activity of drones
+
+```{r leaving_counts_and_times,tidy=T, eval=T}
+
+individual_departure_times_morning_counts <- d %>% 
+  arrange(ID, Date.Time) %>% 
+  group_by(ID) %>% 
+  mutate(Departure  = lag(Classification) == "A" & Classification == "B" & lead(Classification) == "B" & Hour <= 11) %>% 
+  filter(Departure == 'TRUE') %>%
+  mutate(n=n()) %>%  # count how often the bee leaves
+  ungroup() %>%
+  select(Date, Civil.Time, n, ID) %>%
+  mutate(ID.short = str_sub(ID, -3)) # add ID
+  
+ggplot(individual_departure_times_morning_counts, aes(x = Civil.Time, y = ID, colour = factor(n))) + 
+  geom_path(alpha = 0.5,colour = "darkgrey") + 
+  geom_point() +  
+  theme_bw() +
+  labs(x = "hour of day", y = "individual bee") + 
+  theme(plot.title = element_text(face = "bold"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text.y.left = element_blank(),
+        axis.ticks.y.left  = element_blank(),
+        plot.subtitle = element_text(face = "italic"),
+        strip.text = element_text(face = "bold"),
+        strip.background = element_blank()) +
+  scale_colour_discrete(name = "Individual\nDays:")
+
+
+```
+
+Dawn and morning activity of drones in different days during the experiment.
+
+
+[Back to Top](#top)
+
+### Number of flights in the solar time
+
+```{r Flight_Duration_SolarTime, tidy=F, eval=T}
+
+Flight_Duration_SolarTime <- d %>% 
+  arrange(ID, Civil.Time) %>%     
+  group_by(ID, Date) %>%  
+  mutate(Departure  = lag(Classification) == "A" & Classification == "B" & lead(Classification) == "B") %>% 
+  mutate(Arrival = lag(Classification) == "B" & Classification == "A" & lead(Classification) == "A") %>%
+  filter(Departure == 'TRUE' | Arrival == "TRUE") %>%
+  mutate(Flight.complete = lag(Departure) == "TRUE" & Arrival == "TRUE") %>%
+  mutate(Flight.Duration = (Date.Time - lag(Date.Time)) / 60) %>%
+  filter(Flight.complete  == "TRUE") %>% 
+  ungroup() %>%
+  mutate(Hour  = as.numeric(Hour)) %>%
+  mutate(Hour2 = as.numeric(Hour)-1)
+
+
+Flight_Duration_SolarTime$Category <- NA
+Flight_Duration_SolarTime$Category[Flight_Duration_SolarTime$Flight.Duration < 3] = "< 3"
+Flight_Duration_SolarTime$Category[Flight_Duration_SolarTime$Flight.Duration >= 3 & Flight_Duration_SolarTime$Flight.Duration < 10] = "3 - 10"
+Flight_Duration_SolarTime$Category[Flight_Duration_SolarTime$Flight.Duration >= 10 & Flight_Duration_SolarTime$Flight.Duration < 60] = "10 - 60" 
+Flight_Duration_SolarTime$Category[Flight_Duration_SolarTime$Flight.Duration > 60] = "> 60" 
+
+Flight_Duration_SolarTime$Category = factor(Flight_Duration_SolarTime$Category,
+                    levels=c("< 3", "3 - 10", "10 - 60", "> 60"))
+
+#str(Flight_Duration_SolarTime)  
+
+ggplot(Flight_Duration_SolarTime, aes(x = Hour2, fill = Category)) + 
+  geom_bar() + 
+  theme_bw() + 
+  labs(x = "hour of day", 
+       y = "number of flights", 
+       title = "Number of flights in the solar time") +
+  theme(plot.title = element_text(face = "bold"),
+        legend.position = c(.15, 0.8),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.title = element_text(size=9)) +
+  scale_fill_manual(values = c("#d9d9d9","#969696","#525252","#000000"),name = "Flight duration (min)") + 
+  #xlim(6,22) + 
+   scale_x_continuous(limits = c(6, 22), 
+                      breaks = c(10, 15, 20), 
+                      labels = c("10am", "3pm", "8pm"))
+```
+Flight duration time in minutes and departure in the solar time of drones marked with RFID during the nuptial flights season in NW Argentina.
+
+[Back to Top](#top)
+
+### Number of days each drone remains inside and outside the hive
+
+```{r inside_outside, eval=T,tidy=F}
+
+Outside <- d %>% 
+  arrange(ID, Date.Time) %>%     
+  group_by(ID) %>%      
+  mutate(Departure  = lag(Classification) == "A" & Classification == "B" & lead(Classification) == "B") %>% 
+  mutate(Arrival    = lag(Classification) == "B" & Classification == "A" & lead(Classification) == "A") %>%
+  filter(Departure == 'TRUE' | Arrival == "TRUE") %>%
+  mutate(Flight.complete = lag(Departure) == "TRUE" & Arrival == "TRUE") %>%
+  mutate(Flight.Duration.Minutes = (Date.Time - lag(Date.Time)) / 60) %>%
+  mutate(Days  = as.numeric(difftime(Date.Time, lag(Date.Time)),units="days")) %>%
+  filter(Flight.complete  == "TRUE" & Days <= 4) %>%
+  mutate(Type = "Outside")
+
+Inside <- d %>% 
+  arrange(ID, Date.Time) %>%                                   
+  group_by(ID) %>%               
+  mutate(Arrival   = lag(Classification) == "B" & Classification == "A" & lead(Classification) == "A") %>%
+  mutate(Departure = lag(Classification) == "A" & Classification == "B" & lead(Classification) == "B") %>% 
+  filter(Departure == 'TRUE' | Arrival == "TRUE") %>%
+  mutate(Flight.complete =  Arrival == "TRUE" & lead(Departure) == "TRUE") %>%
+  mutate(Flight.Duration.Minutes = abs(Date.Time - lead(Date.Time)) / 60) %>%
+  mutate(Days = abs(as.numeric(difftime(Date.Time, lead(Date.Time)),units="days"))) %>%
+  filter(Flight.complete  == "TRUE" & Days <= 4) %>%
+  mutate(Type = "Inside")
+
+In_Out <- rbind(Inside, Outside)
+
+ggplot(In_Out, aes(y = Days, x = ID)) + 
+  geom_point(size = 0.8, alpha = 0.5) + 
+  facet_grid(cols = vars(Type)) +
+  theme_bw() + 
+  labs(y = "days", 
+       x = "Individual recordings") + 
+  theme(plot.subtitle = element_text(face = "italic"),
+        legend.position = c(0.85,0.2),
+        legend.title = element_text(size=9),
+        axis.text.x.bottom = element_blank(),
+        axis.ticks.x.bottom = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) 
+
+```
+
+Time in number of days that each drone remains inside and outside the hive during the mating season.
+
+[End of the document - Back to Top](#top)

@@ -1,0 +1,4 @@
+1D0030100100101200000219
+Date, Time, Duration (hrs:min:sec.micro), Classification (60 seconds threshold), Detection count, Antenna 1, , Antenna 2, Antenna 3, Antenna 4 
+2017-10-27,20:25:35,00:00:04,A,5,0,0,0,5
+2017-10-27,20:30:37,00:02:05,A,166,0,0,87,79
